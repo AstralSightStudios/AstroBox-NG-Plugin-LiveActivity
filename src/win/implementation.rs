@@ -50,7 +50,7 @@ pub mod core {
             // set_progress(tag, caption, status, value, value_text)
             .set_progress(&id, &task_name, &task_type, progress, &progress_text)
             .show()
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .map_err(|e| corelib::anyhow_site!("{}", e))
             .context("Failed to show toast notification")?;
 
         Ok(())
@@ -85,7 +85,7 @@ pub mod core {
 
         if (p - 1.0).abs() < f32::EPSILON {
             WinToastNotify::progress_complete(None, &tag, &"传输完成", &"100%")
-                .map_err(|e| anyhow::anyhow!("{}", e))
+                .map_err(|e| corelib::anyhow_site!("{}", e))
                 .context("Failed to complete toast progress")?;
             let mut g = current_tag().lock().unwrap();
             *g = None;
@@ -96,7 +96,7 @@ pub mod core {
                 format!("{:.1}%", p * 100.0)
             };
             WinToastNotify::progress_update(None, &tag, p, &pct_text)
-                .map_err(|e| anyhow::anyhow!("{}", e))
+                .map_err(|e| corelib::anyhow_site!("{}", e))
                 .context("Failed to update toast progress")?;
         }
 

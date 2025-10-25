@@ -1,6 +1,6 @@
 pub mod core {
     use crate::models::*;
-    use anyhow::{bail, Context, Result};
+    use anyhow::{Context, Result};
     use mac_notification_sys::{send_notification, set_application, Notification};
     use std::sync::{Mutex, OnceLock};
 
@@ -86,7 +86,7 @@ pub mod core {
         {
             let g = current_tag().lock().unwrap();
             if g.is_none() {
-                bail!("No active live activity to update");
+                corelib::bail_site!("No active live activity to update");
             }
         }
         let meta = {
