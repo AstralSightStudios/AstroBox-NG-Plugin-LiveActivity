@@ -143,12 +143,9 @@ class LiveActivityManager(private val activity: Activity) {
                 val channel = NotificationChannel(
                     CHANNEL_ID,
                     CHANNEL_NAME,
-                    NotificationManager.IMPORTANCE_HIGH
+                    NotificationManager.IMPORTANCE_LOW
                 )
                 channel.description = "Live activity notifications for ongoing tasks"
-                channel.enableLights(true)
-                channel.enableVibration(true)
-                channel.setShowBadge(true)
                 channel.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 notificationManager.createNotificationChannel(channel)
                 Log.d(TAG, "Notification channel created with HIGH importance: $CHANNEL_ID")
@@ -185,9 +182,9 @@ class LiveActivityManager(private val activity: Activity) {
             Log.w(TAG, "No live activity data available for building notification")
             return NotificationCompat.Builder(activity, CHANNEL_ID).build()
         }
-        
+
         Log.d(TAG, "Building notification for activity: ${live.id}, state: $state")
-        
+
         val iconRes = activity.applicationInfo.icon.takeIf { it != 0 }
             ?: android.R.drawable.ic_dialog_info
 
@@ -204,7 +201,6 @@ class LiveActivityManager(private val activity: Activity) {
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setShortCriticalText("${progressInfo.percent}%")
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setWhen(System.currentTimeMillis())
             .setShowWhen(false)
 
