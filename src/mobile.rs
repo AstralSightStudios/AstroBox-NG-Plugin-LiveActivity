@@ -18,7 +18,7 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
     #[cfg(target_os = "android")]
     let handle = api.register_android_plugin(
         "com.astralsight.astrobox.plugin.live_activity",
-        "ExamplePlugin",
+        "LiveActivity",
     )?;
     #[cfg(target_os = "ios")]
     let handle = api.register_ios_plugin(init_plugin_live_activity)?;
