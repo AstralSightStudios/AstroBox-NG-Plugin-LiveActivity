@@ -18,6 +18,26 @@ corelib = { path = "../../modules/core" }
 [target.'cfg(windows)'.dependencies.win-toast-notify]
 version = "0.1.6"
 
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.58.0"
+features = [
+    "Data_Xml_Dom",
+    "Foundation_Collections",
+    "UI_Notifications",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[target.'cfg(windows)'.dependencies.image]
+version = "0.25.5"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 mac-notification-sys = "0.6.8"
