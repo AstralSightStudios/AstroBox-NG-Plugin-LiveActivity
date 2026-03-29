@@ -35,8 +35,10 @@ pub mod core {
 
     fn clear_all_notifications() {
         unsafe {
-            let center: *mut AnyObject =
-                msg_send![class!(NSUserNotificationCenter), defaultUserNotificationCenter];
+            let center: *mut AnyObject = msg_send![
+                class!(NSUserNotificationCenter),
+                defaultUserNotificationCenter
+            ];
             if center.is_null() {
                 return;
             }

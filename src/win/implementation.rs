@@ -1,15 +1,15 @@
 pub mod core {
     use crate::models::*;
     use anyhow::{Context, Result};
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
     use windows::{
-        core::{GUID, HSTRING, HRESULT, Interface, PCWSTR, PWSTR, PROPVARIANT},
+        core::{Interface, GUID, HRESULT, HSTRING, PCWSTR, PROPVARIANT, PWSTR},
         Data::Xml::Dom::XmlDocument,
         Foundation::{DateTime, IReference, PropertyValue},
-        UI::Notifications::{
-            NotificationData, ToastNotification, ToastNotificationManager, ToastNotifier,
-        },
         Win32::{
             Foundation::WIN32_ERROR,
             Graphics::Gdi::{
@@ -25,17 +25,18 @@ pub mod core {
                 HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, KEY_WOW64_64KEY,
                 REG_OPTION_NON_VOLATILE, REG_SZ, REG_VALUE_TYPE,
             },
-            UI::Shell::{
-                ExtractIconExW, IShellLinkW, ShellLink, SHGetKnownFolderPath, FOLDERID_LocalAppData,
-                FOLDERID_Programs, KF_FLAG_DEFAULT, SetCurrentProcessExplicitAppUserModelID,
-            },
             UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY},
+            UI::Shell::{
+                ExtractIconExW, FOLDERID_LocalAppData, FOLDERID_Programs, IShellLinkW,
+                SHGetKnownFolderPath, SetCurrentProcessExplicitAppUserModelID, ShellLink,
+                KF_FLAG_DEFAULT,
+            },
             UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO},
         },
+        UI::Notifications::{
+            NotificationData, ToastNotification, ToastNotificationManager, ToastNotifier,
+        },
     };
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use std::path::PathBuf;
 
     static CURRENT_TAG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     static CURRENT_META: OnceLock<Mutex<Option<Meta>>> = OnceLock::new();
@@ -57,7 +58,10 @@ pub mod core {
     }
 
     fn to_wide(s: &str) -> Vec<u16> {
-        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+        OsStr::new(s)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
     }
 
     fn path_to_file_uri(path: &std::path::Path) -> String {
@@ -103,13 +107,16 @@ pub mod core {
         if !exe.exists() {
             return Ok(None);
         }
-        let folder_ptr = unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, None)? };
+        let folder_ptr =
+            unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, None)? };
         let local_dir = pwstr_to_string(folder_ptr);
         unsafe { CoTaskMemFree(Some(folder_ptr.0 as _)) };
         if local_dir.is_empty() {
             return Ok(None);
         }
-        let cache_dir = std::path::Path::new(&local_dir).join("AstroBox").join("icons");
+        let cache_dir = std::path::Path::new(&local_dir)
+            .join("AstroBox")
+            .join("icons");
         std::fs::create_dir_all(&cache_dir)?;
         let cache_path = cache_dir.join("toast_app_icon.png");
         if cache_path.exists() {
@@ -127,10 +134,18 @@ pub mod core {
         unsafe { GetIconInfo(large, &mut info)? };
         let mut bitmap = BITMAP::default();
         let bytes = unsafe {
-            GetObjectW(info.hbmColor, std::mem::size_of::<BITMAP>() as i32, Some((&mut bitmap as *mut BITMAP).cast()))
+            GetObjectW(
+                info.hbmColor,
+                std::mem::size_of::<BITMAP>() as i32,
+                Some((&mut bitmap as *mut BITMAP).cast()),
+            )
         };
         if bytes == 0 || bitmap.bmWidth == 0 || bitmap.bmHeight == 0 {
-            unsafe { let _ = DeleteObject(info.hbmColor); let _ = DeleteObject(info.hbmMask); let _ = DestroyIcon(large); };
+            unsafe {
+                let _ = DeleteObject(info.hbmColor);
+                let _ = DeleteObject(info.hbmMask);
+                let _ = DestroyIcon(large);
+            };
             return Ok(None);
         }
 
@@ -179,7 +194,8 @@ pub mod core {
             chunk[0] = r;
             chunk[2] = b;
         }
-        let image = image::RgbaImage::from_raw(width, height, buffer).ok_or_else(|| anyhow::anyhow!("Invalid icon buffer"))?;
+        let image = image::RgbaImage::from_raw(width, height, buffer)
+            .ok_or_else(|| anyhow::anyhow!("Invalid icon buffer"))?;
         image.save(&cache_path)?;
         Ok(Some(path_to_file_uri(&cache_path)))
     }
@@ -187,10 +203,10 @@ pub mod core {
     fn reg_set_sz(hkey: HKEY, name: &str, value: &str) -> Result<()> {
         let name_w = to_wide(name);
         let value_w = to_wide(value);
-        let bytes = unsafe {
-            std::slice::from_raw_parts(value_w.as_ptr() as *const u8, value_w.len() * 2)
-        };
-        let status = unsafe { RegSetValueExW(hkey, PCWSTR(name_w.as_ptr()), 0, REG_SZ, Some(bytes)) };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(value_w.as_ptr() as *const u8, value_w.len() * 2) };
+        let status =
+            unsafe { RegSetValueExW(hkey, PCWSTR(name_w.as_ptr()), 0, REG_SZ, Some(bytes)) };
         if status != WIN32_ERROR(0) {
             corelib::bail_site!("Registry write failed: {}", status.0);
         }
@@ -230,7 +246,9 @@ pub mod core {
         }
         let u16_len = (size as usize / 2).min(buf.len() / 2);
         let u16_slice = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u16, u16_len) };
-        let value = String::from_utf16_lossy(u16_slice).trim_end_matches('\0').to_string();
+        let value = String::from_utf16_lossy(u16_slice)
+            .trim_end_matches('\0')
+            .to_string();
         Ok(Some(value))
     }
 
@@ -268,19 +286,25 @@ pub mod core {
             }
             Ok(())
         })();
-        unsafe { let _ = RegCloseKey(hkey); };
+        unsafe {
+            let _ = RegCloseKey(hkey);
+        };
         result
     }
 
     fn ensure_shortcut_inner(app_id: &str) -> Result<()> {
         let exe = std::env::current_exe()?;
-        let exe_dir = exe.parent().unwrap_or_else(|| std::path::Path::new("")).to_path_buf();
+        let exe_dir = exe
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(""))
+            .to_path_buf();
         let exe_str = exe.to_string_lossy().to_string();
         let exe_dir_str = exe_dir.to_string_lossy().to_string();
         let exe_w = to_wide(&exe_str);
         let exe_dir_w = to_wide(&exe_dir_str);
 
-        let folder_ptr = unsafe { SHGetKnownFolderPath(&FOLDERID_Programs, KF_FLAG_DEFAULT, None)? };
+        let folder_ptr =
+            unsafe { SHGetKnownFolderPath(&FOLDERID_Programs, KF_FLAG_DEFAULT, None)? };
         let programs_dir = pwstr_to_string(folder_ptr);
         unsafe { CoTaskMemFree(Some(folder_ptr.0 as _)) };
         if programs_dir.is_empty() {
@@ -488,7 +512,8 @@ pub mod core {
         let xml_h = HSTRING::from(xml);
         doc.LoadXml(&xml_h).context("Toast XML load failed")?;
 
-        let toast = ToastNotification::CreateToastNotification(&doc).context("Create toast failed")?;
+        let toast =
+            ToastNotification::CreateToastNotification(&doc).context("Create toast failed")?;
         let tag_h = HSTRING::from(&unique_tag);
         toast.SetTag(&tag_h).context("Set toast tag failed")?;
 
@@ -505,8 +530,7 @@ pub mod core {
         toast.SetData(&data).context("Set toast data failed")?;
         if (progress_value - 1.0).abs() < f32::EPSILON {
             let expire = expiration_after(Duration::from_secs(2));
-            let expire_ref: IReference<DateTime> =
-                PropertyValue::CreateDateTime(expire)?.cast()?;
+            let expire_ref: IReference<DateTime> = PropertyValue::CreateDateTime(expire)?.cast()?;
             toast
                 .SetExpirationTime(&expire_ref)
                 .context("Set expiration failed")?;
@@ -575,12 +599,12 @@ pub mod core {
             let doc = XmlDocument::new()?;
             let xml_h = HSTRING::from(xml);
             doc.LoadXml(&xml_h).context("Toast XML load failed")?;
-            let toast = ToastNotification::CreateToastNotification(&doc).context("Create toast failed")?;
+            let toast =
+                ToastNotification::CreateToastNotification(&doc).context("Create toast failed")?;
             let tag_h = HSTRING::from(&tag);
             toast.SetTag(&tag_h).context("Set toast tag failed")?;
             let expire = expiration_after(Duration::from_secs(2));
-            let expire_ref: IReference<DateTime> =
-                PropertyValue::CreateDateTime(expire)?.cast()?;
+            let expire_ref: IReference<DateTime> = PropertyValue::CreateDateTime(expire)?.cast()?;
             toast
                 .SetExpirationTime(&expire_ref)
                 .context("Set expiration failed")?;
