@@ -94,7 +94,7 @@ extension LiveActivityAttributes {
             type: LiveActivityContent.ContentType.taskQueue,
             title: "任务执行中",
             text: "正在推送资源",
-            taskName: "刘宸高清大头照",
+            taskName: "HyperBox",
             taskType: "快应用",
             taskIcon: ""
         )
@@ -102,8 +102,8 @@ extension LiveActivityAttributes {
 
     public static var previewContentState: ContentState {
         .init(stateItems: [
-            "percent": "91",
-            "progress": "0.91",
+            "percent": "78",
+            "progress": "0.78",
         ])
     }
 }
