@@ -9,7 +9,7 @@ exclude = ["/examples", "/dist-js", "/guest-js", "/node_modules"]
 links = "live-activity"
 
 [dependencies]
-tauri = { version = "2.9.2", features = ["rustls-tls"] }
+tauri = { version = "2.11.0", features = ["rustls-tls"] }
 serde = "1.0"
 thiserror = "2"
 anyhow = "1"
@@ -45,4 +45,4 @@ objc2 = "0.6.3"
 objc2-user-notifications = "0.3.2"
 
 [build-dependencies]
-tauri-plugin = { version = "2.5.1", features = ["build"] }
+tauri-plugin = { version = "2.6.0", features = ["build"] }
