@@ -84,7 +84,6 @@ public final class ActivityManager {
             return
         }
 
-        // 若内存丢失，尝试从系统找回唯一活动
         if currentActivity == nil {
             self.currentActivity = Activity<LiveActivityAttributes>.activities.first
             if let recovered = currentActivity {
@@ -92,16 +91,29 @@ public final class ActivityManager {
             }
         }
 
-        guard let activity = currentActivity else {
+        guard let activityID = currentActivity?.id else {
             webviewLog("Note: There are no live activities in progress to update.")
             return
         }
 
-        Task {
-            let updatedContentState = LiveActivityAttributes.ContentState(stateItems: newState)
+        let state = newState
+
+        Task.detached {
+            guard let activity = Activity<LiveActivityAttributes>.activities.first(where: { $0.id == activityID }) else {
+                await MainActor.run {
+                    webviewLog("Note: Activity not found when updating.")
+                }
+                return
+            }
+
+            let updatedContentState = LiveActivityAttributes.ContentState(stateItems: state)
             let content = ActivityContent(state: updatedContentState, staleDate: nil)
+
             await activity.update(content)
-            webviewLog("Live activity updated successfully.")
+
+            await MainActor.run {
+                webviewLog("Live activity updated successfully.")
+            }
         }
     }
 
@@ -116,7 +128,6 @@ public final class ActivityManager {
         finalState: [String: String]? = nil,
         dismissalPolicy: ActivityUIDismissalPolicy = .immediate
     ) {
-        // 若内存丢失，尝试从系统找回唯一活动
         if currentActivity == nil {
             self.currentActivity = Activity<LiveActivityAttributes>.activities.first
             if let recovered = currentActivity {
@@ -124,32 +135,46 @@ public final class ActivityManager {
             }
         }
 
-        guard let activity = currentActivity else {
+        guard let activityID = currentActivity?.id else {
             webviewLog("Note: There are no live activities in progress to end.")
             return
         }
 
-        let finalContent: ActivityContent<LiveActivityAttributes.ContentState>?
-        if let finalState {
-            let finalContentState = LiveActivityAttributes.ContentState(stateItems: finalState)
-            finalContent = ActivityContent(state: finalContentState, staleDate: nil)
-        } else {
-            finalContent = nil
-        }
-
         isEnding = true
 
-        Task {
-            await activity.end(finalContent, dismissalPolicy: dismissalPolicy)
-            // 结束后清空引用
-            self.currentActivity = nil
-            self.isEnding = false
+        let state = finalState
+        let policy = dismissalPolicy
 
-            if Activity<LiveActivityAttributes>.activities.isEmpty {
-                webviewLog("The live activity has ended (immediate).")
+        Task.detached {
+            guard let activity = Activity<LiveActivityAttributes>.activities.first(where: { $0.id == activityID }) else {
+                await MainActor.run {
+                    self.currentActivity = nil
+                    self.isEnding = false
+                    webviewLog("Note: Activity not found when ending.")
+                }
+                return
+            }
+
+            let finalContent: ActivityContent<LiveActivityAttributes.ContentState>?
+
+            if let state {
+                let finalContentState = LiveActivityAttributes.ContentState(stateItems: state)
+                finalContent = ActivityContent(state: finalContentState, staleDate: nil)
             } else {
-                // 理论上单实例场景这里也应为空；如果非空，多数是系统宽限/可见性延迟
-                webviewLog("The live activity requested to end; system may finalize shortly.")
+                finalContent = nil
+            }
+
+            await activity.end(finalContent, dismissalPolicy: policy)
+
+            await MainActor.run {
+                self.currentActivity = nil
+                self.isEnding = false
+
+                if Activity<LiveActivityAttributes>.activities.isEmpty {
+                    webviewLog("The live activity has ended (immediate).")
+                } else {
+                    webviewLog("The live activity requested to end; system may finalize shortly.")
+                }
             }
         }
     }
