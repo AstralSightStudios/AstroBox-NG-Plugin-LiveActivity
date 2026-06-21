@@ -74,6 +74,37 @@ public final class ActivityManager {
         }
     }
 
+    // MARK: - Cold-launch cleanup
+
+    /// 进程冷启动时调用：任务队列是进程内状态，不会跨进程存活，所以系统里若还残留着
+    /// 实时活动，它一定是“孤儿”——对应任务已随上一个进程（被系统/用户杀掉）一起消失。
+    ///
+    /// 由于被杀的 App 不会再执行任何代码（不会回调 willTerminate），唯一能可靠清理这种
+    /// 残留灵动岛/锁屏活动的时机就是下一次冷启动。这里把它们全部立刻结束：既清掉残留 UI，
+    /// 也顺手解除“单实例”守卫对新建活动的占用。
+    public func endOrphanedActivities() {
+        let activities = Activity<LiveActivityAttributes>.activities
+
+        // 先就地视为“无当前活动”，让随后的新建请求不被单实例守卫挡住。
+        currentActivity = nil
+        isEnding = false
+
+        guard !activities.isEmpty else {
+            return
+        }
+
+        webviewLog("Cold launch: ending \(activities.count) orphaned live activity(ies).")
+
+        Task.detached {
+            for activity in activities {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
+            await MainActor.run {
+                webviewLog("Cold launch: orphaned live activities ended.")
+            }
+        }
+    }
+
     // MARK: - Update
 
     /// 更新当前实时活动的内容状态。

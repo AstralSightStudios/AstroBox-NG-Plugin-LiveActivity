@@ -6,6 +6,10 @@ class LiveActivityPlugin: Plugin {
     override func load(webview: WKWebView) {
         Task { @MainActor in
             WebViewLogger.shared.set(webview: webview)
+            // 冷启动清理：上次进程若被杀，残留的实时活动是孤儿，直接清掉。
+            if #available(iOS 16.2, *) {
+                ActivityManager.shared.endOrphanedActivities()
+            }
         }
     }
     
