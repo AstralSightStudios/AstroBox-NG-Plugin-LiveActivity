@@ -1,6 +1,6 @@
 import Foundation
 import SwiftUI
-import ActivityKit
+@preconcurrency import ActivityKit
 
 @available(iOS 16.2, *)
 @MainActor
@@ -59,11 +59,10 @@ public final class ActivityManager {
                 if let oldActivity = self.activitiesById[taskQueueData.id] {
                     webviewLog("Duplicate live activity ID \(taskQueueData.id), ending the previous one first.")
                     self.endingActivityIds.insert(taskQueueData.id)
-                    Task.detached { [weak self] in
+                    // Inherit @MainActor so capturing the non-Sendable Activity stays race-free.
+                    Task { [weak self] in
                         await oldActivity.end(nil, dismissalPolicy: .immediate)
-                        await MainActor.run {
-                            self?.endingActivityIds.remove(taskQueueData.id)
-                        }
+                        self?.endingActivityIds.remove(taskQueueData.id)
                     }
                     self.activitiesById[taskQueueData.id] = nil
                 }
@@ -101,13 +100,12 @@ public final class ActivityManager {
 
         webviewLog("Cold launch: ending \(activities.count) orphaned live activity(ies).")
 
-        Task.detached {
+        // Inherit @MainActor so capturing activities stays race-free.
+        Task {
             for activity in activities {
                 await activity.end(nil, dismissalPolicy: .immediate)
             }
-            await MainActor.run {
-                webviewLog("Cold launch: orphaned live activities ended.")
-            }
+            webviewLog("Cold launch: orphaned live activities ended.")
         }
     }
 
@@ -140,15 +138,14 @@ public final class ActivityManager {
 
         let state = newState
 
-        Task.detached {
+        // Inherit @MainActor so capturing the non-Sendable Activity stays race-free.
+        Task {
             let updatedContentState = LiveActivityAttributes.ContentState(stateItems: state)
             let content = ActivityContent(state: updatedContentState, staleDate: nil)
 
             await activity.update(content)
 
-            await MainActor.run {
-                webviewLog("Live activity \(activityId) updated successfully.")
-            }
+            webviewLog("Live activity \(activityId) updated successfully.")
         }
     }
 
@@ -185,7 +182,8 @@ public final class ActivityManager {
             return
         }
 
-        Task.detached {
+        // Inherit @MainActor so capturing the non-Sendable Activity stays race-free.
+        Task {
             let finalContent: ActivityContent<LiveActivityAttributes.ContentState>?
 
             if let state {
@@ -197,19 +195,17 @@ public final class ActivityManager {
 
             await activity.end(finalContent, dismissalPolicy: policy)
 
-            await MainActor.run {
-                // Only clear the mapping if it still points at the instance
-                // we just ended; a newer instance may have taken over this id.
-                if self.activitiesById[activityId] === activity {
-                    self.activitiesById[activityId] = nil
-                }
-                self.endingActivityIds.remove(activityId)
+            // Only clear the mapping if it still points at the instance
+            // we just ended; a newer instance may have taken over this id.
+            if self.activitiesById[activityId] === activity {
+                self.activitiesById[activityId] = nil
+            }
+            self.endingActivityIds.remove(activityId)
 
-                if Activity<LiveActivityAttributes>.activities.isEmpty {
-                    webviewLog("The live activity \(activityId) has ended (immediate).")
-                } else {
-                    webviewLog("The live activity \(activityId) requested to end; system may finalize shortly.")
-                }
+            if Activity<LiveActivityAttributes>.activities.isEmpty {
+                webviewLog("The live activity \(activityId) has ended (immediate).")
+            } else {
+                webviewLog("The live activity \(activityId) requested to end; system may finalize shortly.")
             }
         }
     }
