@@ -71,7 +71,21 @@ public struct CreateLiveActivityRequest: Decodable, Sendable {
 }
 
 public struct UpdateLiveActivityRequest: Decodable, Sendable {
+    public var activityId: String
     public var state: [String: String]
+
+    public enum CodingKeys: String, CodingKey {
+        case activityId = "activity_id"
+        case state
+    }
+}
+
+public struct RemoveLiveActivityRequest: Decodable, Sendable {
+    public var activityId: String
+
+    public enum CodingKeys: String, CodingKey {
+        case activityId = "activity_id"
+    }
 }
 
 public struct LiveActivityAttributes: ActivityAttributes {

@@ -32,5 +32,12 @@ class ActivityContentTaskQueue {
 
 @InvokeArg
 class UpdateLiveActivityArgs {
+    var activity_id: String? = null
+
     var state: Map<String, String>? = null
+}
+
+@InvokeArg
+class RemoveLiveActivityArgs {
+    var activity_id: String? = null
 }

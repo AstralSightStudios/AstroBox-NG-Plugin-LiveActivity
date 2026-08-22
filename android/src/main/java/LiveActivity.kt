@@ -29,7 +29,8 @@ class LiveActivity(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun removeLiveActivity(invoke: Invoke) {
-        manager.remove()
+        val args = invoke.parseArgs(RemoveLiveActivityArgs::class.java)
+        manager.remove(args)
         invoke.resolve()
     }
 }

@@ -41,9 +41,9 @@ impl<R: Runtime> LiveActivity<R> {
             .map_err(Into::into)
     }
 
-    pub fn remove_live_activity(&self) -> Result<()> {
+    pub fn remove_live_activity(&self, payload: RemoveLiveActivityRequest) -> Result<()> {
         self.0
-            .run_mobile_plugin("removeLiveActivity", ())
+            .run_mobile_plugin("removeLiveActivity", payload)
             .map_err(Into::into)
     }
 }

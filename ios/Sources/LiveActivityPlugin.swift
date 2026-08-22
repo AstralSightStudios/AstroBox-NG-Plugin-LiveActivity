@@ -32,16 +32,17 @@ class LiveActivityPlugin: Plugin {
         let args = try invoke.parseArgs(UpdateLiveActivityRequest.self)
         if #available(iOS 16.2, *) {
             Task { @MainActor in
-                ActivityManager.shared.updateActivity(newState: args.state)
+                ActivityManager.shared.updateActivity(activityId: args.activityId, newState: args.state)
             }
         }
         invoke.resolve()
     }
     
     @objc public func removeLiveActivity(_ invoke: Invoke) throws {
+        let args = try invoke.parseArgs(RemoveLiveActivityRequest.self)
         if #available(iOS 16.2, *) {
             Task { @MainActor in
-                ActivityManager.shared.endActivity()
+                ActivityManager.shared.endActivity(activityId: args.activityId)
             }
         }
         invoke.resolve()

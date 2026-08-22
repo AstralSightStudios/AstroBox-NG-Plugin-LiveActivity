@@ -23,8 +23,9 @@ private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1001
 
 class LiveActivityManager(private val activity: Activity) {
     private val notificationManager = NotificationManagerCompat.from(activity)
-    private var current: LiveActivityData? = null
-    private var isEnding = false
+    private val activities = LinkedHashMap<String, LiveActivityData>()
+    private val endingIds = mutableSetOf<String>()
+    private var nextNotificationIdOffset = 0
 
     data class LiveActivityData(
         val id: String,
@@ -33,16 +34,12 @@ class LiveActivityManager(private val activity: Activity) {
         val taskName: String,
         val taskType: String,
         val taskIcon: String,
-        var state: Map<String, String>
+        var state: Map<String, String>,
+        val notificationId: Int
     )
 
     @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
     fun create(args: CreateLiveActivityArgs) {
-        if (current != null) {
-            Log.i(TAG, "Live activity already exists; skip create.")
-            return
-        }
-
         if (!hasNotificationPermission()) {
             Log.w(TAG, "Notification permission not granted. Requesting permission.")
             requestNotificationPermission()
@@ -62,20 +59,32 @@ class LiveActivityManager(private val activity: Activity) {
                 return
             }
 
+            val id = data.id ?: ""
             val state = data.state ?: emptyMap()
-            current = LiveActivityData(
-                id = data.id ?: "",
+            val existing = activities[id]
+            if (existing != null) {
+                Log.i(TAG, "Live activity $id already exists; replacing its notification.")
+                notificationManager.cancel(existing.notificationId)
+            }
+            val notificationId = existing?.notificationId ?: allocateNotificationId()
+            endingIds.remove(id)
+            val live = LiveActivityData(
+                id = id,
                 title = data.title ?: "",
                 text = data.text ?: "",
                 taskName = data.taskName ?: "",
                 taskType = data.taskType ?: "",
                 taskIcon = data.taskIcon ?: "",
-                state = state
+                state = state,
+                notificationId = notificationId
             )
 
+            // Post FIRST, register only on success: a throwing notify() must
+            // not leave an entry that later updates would target blindly.
             ensureChannel()
-            notificationManager.notify(NOTIFICATION_ID, buildNotification(state))
-            Log.i(TAG, "Live activity created.")
+            notificationManager.notify(notificationId, buildNotification(live, state))
+            activities[id] = live
+            Log.i(TAG, "Live activity $id created.")
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException while creating notification: ${e.message}")
             throw e
@@ -87,14 +96,20 @@ class LiveActivityManager(private val activity: Activity) {
 
     @RequiresPermission(Manifest.permission.POST_NOTIFICATIONS)
     fun update(args: UpdateLiveActivityArgs) {
-        if (isEnding) {
-            Log.i(TAG, "Live activity is ending; skip update.")
+        val activityId = args.activity_id
+        if (activityId == null) {
+            Log.w(TAG, "Missing activity_id in update request.")
             return
         }
 
-        val live = current
+        if (activityId in endingIds) {
+            Log.i(TAG, "Live activity $activityId is ending; skip update.")
+            return
+        }
+
+        val live = activities[activityId]
         if (live == null) {
-            Log.i(TAG, "No live activity to update.")
+            Log.i(TAG, "No live activity with id $activityId to update.")
             return
         }
 
@@ -107,8 +122,8 @@ class LiveActivityManager(private val activity: Activity) {
             val state = args.state ?: live.state
             live.state = state
             ensureChannel()
-            notificationManager.notify(NOTIFICATION_ID, buildNotification(state))
-            Log.i(TAG, "Live activity updated.")
+            notificationManager.notify(live.notificationId, buildNotification(live, state))
+            Log.i(TAG, "Live activity $activityId updated.")
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException while updating notification: ${e.message}")
             throw e
@@ -118,22 +133,33 @@ class LiveActivityManager(private val activity: Activity) {
         }
     }
 
-    fun remove() {
-        if (current == null) {
-            Log.i(TAG, "No live activity to remove.")
+    fun remove(args: RemoveLiveActivityArgs) {
+        val activityId = args.activity_id
+        if (activityId == null) {
+            Log.w(TAG, "Missing activity_id in remove request.")
+            return
+        }
+
+        val live = activities[activityId]
+        if (live == null) {
+            Log.i(TAG, "No live activity with id $activityId to remove.")
             return
         }
 
         try {
-            isEnding = true
-            notificationManager.cancel(NOTIFICATION_ID)
-            current = null
-            isEnding = false
-            Log.i(TAG, "Live activity removed successfully.")
+            endingIds.add(activityId)
+            notificationManager.cancel(live.notificationId)
+            activities.remove(activityId)
+            endingIds.remove(activityId)
+            Log.i(TAG, "Live activity $activityId removed successfully.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to remove live activity: ${e.message}")
             throw e
         }
+    }
+
+    private fun allocateNotificationId(): Int {
+        return NOTIFICATION_ID + nextNotificationIdOffset++
     }
 
     private fun ensureChannel() {
@@ -177,12 +203,10 @@ class LiveActivityManager(private val activity: Activity) {
         }
     }
 
-    private fun buildNotification(state: Map<String, String>): Notification {
-        val live = current ?: run {
-            Log.w(TAG, "No live activity data available for building notification")
-            return NotificationCompat.Builder(activity, CHANNEL_ID).build()
-        }
-
+    private fun buildNotification(
+        live: LiveActivityData,
+        state: Map<String, String>
+    ): Notification {
         Log.d(TAG, "Building notification for activity: ${live.id}, state: $state")
 
         val iconRes = activity.applicationInfo.icon.takeIf { it != 0 }

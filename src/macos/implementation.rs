@@ -1,20 +1,22 @@
 pub mod core {
     use crate::models::*;
-    use anyhow::{Context, Result};
+    use anyhow::Result;
     use block2::RcBlock;
     use mac_notification_sys::{send_notification, set_application, Notification};
-    use objc2::runtime::{AnyObject, Bool};
-    use objc2::{class, msg_send};
+    use objc2::runtime::Bool;
     use objc2_user_notifications::{
         UNAuthorizationOptions, UNAuthorizationStatus, UNNotificationSettings,
         UNUserNotificationCenter,
     };
+    use std::collections::HashMap;
     use std::process::Command;
     use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
-    static CURRENT_TAG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    static CURRENT_META: OnceLock<Mutex<Option<Meta>>> = OnceLock::new();
+    /// Registry of all live activities, keyed by activity id.
+    /// On macOS the previously tracked "tag" was always the activity id itself,
+    /// so an entry only needs the per-activity metadata.
+    static ACTIVE_ACTIVITIES: OnceLock<Mutex<HashMap<String, Meta>>> = OnceLock::new();
     static NOTIFY_SETTINGS_HINT_SHOWN: OnceLock<()> = OnceLock::new();
     static NOTIFY_PERMISSION_CHECKED: OnceLock<()> = OnceLock::new();
 
@@ -26,24 +28,8 @@ pub mod core {
         bundle_id: Option<String>,
     }
 
-    fn current_tag() -> &'static Mutex<Option<String>> {
-        CURRENT_TAG.get_or_init(|| Mutex::new(None))
-    }
-    fn current_meta() -> &'static Mutex<Option<Meta>> {
-        CURRENT_META.get_or_init(|| Mutex::new(None))
-    }
-
-    fn clear_all_notifications() {
-        unsafe {
-            let center: *mut AnyObject = msg_send![
-                class!(NSUserNotificationCenter),
-                defaultUserNotificationCenter
-            ];
-            if center.is_null() {
-                return;
-            }
-            let _: () = msg_send![center, removeAllDeliveredNotifications];
-        }
+    fn active_activities() -> &'static Mutex<HashMap<String, Meta>> {
+        ACTIVE_ACTIVITIES.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
     fn open_notification_settings_once() {
@@ -111,6 +97,16 @@ pub mod core {
         }
     }
 
+    /// Send a notification via mac-notification-sys.
+    ///
+    /// KNOWN LIMITATION (platform fallback, pre-dates multi-activity): this
+    /// stack exposes no per-notification identifier, so updates post a NEW
+    /// notification instead of replacing in place, and removals cannot target
+    /// a specific delivered notification. The activity registry below is
+    /// therefore bookkeeping-only on macOS. A proper fix would migrate sends
+    /// to UNUserNotificationCenter (objc2-user-notifications) with explicit
+    /// request identifiers + removeDeliveredNotifications; tracked as
+    /// follow-up work, not part of the multi-activity change.
     fn send_notification_checked(
         title: &str,
         subtitle: Option<&str>,
@@ -160,15 +156,15 @@ pub mod core {
             .unwrap_or_else(|| format!("{:.1}%", progress * 100.0));
 
         {
-            *current_tag().lock().unwrap() = Some(id);
-        }
-        {
-            *current_meta().lock().unwrap() = Some(Meta {
-                title: title.clone(),
-                text: text.clone(),
-                icon: icon.clone(),
-                bundle_id: bundle_id.clone(),
-            });
+            active_activities().lock().unwrap().insert(
+                id.clone(),
+                Meta {
+                    title: title.clone(),
+                    text: text.clone(),
+                    icon: icon.clone(),
+                    bundle_id: bundle_id.clone(),
+                },
+            );
         }
 
         let subtitle_opt = Some(task_type);
@@ -194,15 +190,18 @@ pub mod core {
         _self: &impl Sized,
         payload: UpdateLiveActivityRequest,
     ) -> Result<()> {
-        {
-            let g = current_tag().lock().unwrap();
-            if g.is_none() {
-                corelib::bail_site!("No active live activity to update");
-            }
-        }
         let meta = {
-            let m = current_meta().lock().unwrap();
-            m.clone().context("No meta to update")?
+            let map = active_activities().lock().unwrap();
+            match map.get(&payload.activity_id) {
+                Some(m) => m.clone(),
+                None => {
+                    eprintln!(
+                        "[live-activity] update ignored: unknown activity id '{}'",
+                        payload.activity_id
+                    );
+                    return Ok(());
+                }
+            }
         };
         if let Some(ref bid) = meta.bundle_id {
             set_application(bid).ok();
@@ -238,13 +237,15 @@ pub mod core {
                 "Failed to send completion notification",
             )?;
 
-            // 给系统一点时间展示完成通知，然后再清空通知中心，避免“看起来完全没通知”。
-            std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(3));
-                clear_all_notifications();
-            });
-            *current_tag().lock().unwrap() = None;
-            *current_meta().lock().unwrap() = None;
+            // mac-notification-sys 0.6.8 offers no per-notification removal API (and the
+            // notifications it delivers carry no identifier we could match on), so unlike
+            // the previous clear_all_notifications() call — which wiped OTHER activities'
+            // notifications too — the completion notification is simply left to persist
+            // naturally in Notification Center.
+            active_activities()
+                .lock()
+                .unwrap()
+                .remove(&payload.activity_id);
         } else {
             let pct_text = if let Some(s) = payload.state.get("percent") {
                 format!("{}%", s)
@@ -265,27 +266,32 @@ pub mod core {
         Ok(())
     }
 
-    pub fn remove_live_activity(_self: &impl Sized) -> Result<()> {
-        let exists = { current_tag().lock().unwrap().is_some() };
-        if !exists {
-            return Ok(());
-        }
-
-        if let Some(meta) = { current_meta().lock().unwrap().clone() } {
-            if let Some(ref bid) = meta.bundle_id {
-                set_application(bid).ok();
+    pub fn remove_live_activity(_self: &impl Sized, payload: RemoveLiveActivityRequest) -> Result<()> {
+        let meta = {
+            let mut map = active_activities().lock().unwrap();
+            match map.remove(&payload.activity_id) {
+                Some(m) => m,
+                None => {
+                    eprintln!(
+                        "[live-activity] remove ignored: unknown activity id '{}'",
+                        payload.activity_id
+                    );
+                    return Ok(());
+                }
             }
-            let mut opts = Notification::new();
-            if let Some(ref path) = meta.icon {
-                opts.app_icon(path);
-            }
-            let subtitle = Some("已结束");
-            let message = meta.text.clone();
-            send_notification(&meta.title, subtitle, &message, Some(&opts)).ok();
-        }
+        };
 
-        *current_tag().lock().unwrap() = None;
-        *current_meta().lock().unwrap() = None;
+        if let Some(ref bid) = meta.bundle_id {
+            set_application(bid).ok();
+        }
+        let mut opts = Notification::new();
+        if let Some(ref path) = meta.icon {
+            opts.app_icon(path);
+        }
+        let subtitle = Some("已结束");
+        let message = meta.text.clone();
+        send_notification(&meta.title, subtitle, &message, Some(&opts)).ok();
+
         Ok(())
     }
 }

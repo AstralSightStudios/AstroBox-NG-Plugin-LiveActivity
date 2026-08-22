@@ -35,5 +35,13 @@ pub struct CreateLiveActivityRequest {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateLiveActivityRequest {
+    /// Identifier of the activity to update.
+    pub activity_id: String,
     pub state: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RemoveLiveActivityRequest {
+    /// Identifier of the activity to remove.
+    pub activity_id: String,
 }

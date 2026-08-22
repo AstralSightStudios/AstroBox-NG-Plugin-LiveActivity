@@ -39,8 +39,7 @@ impl<R: Runtime> LiveActivity<R> {
         Ok(())
     }
 
-    pub fn remove_live_activity(&self) -> Result<()> {
-        core::remove_live_activity(self)?;
-        Ok(())
+    pub fn remove_live_activity(&self, payload: RemoveLiveActivityRequest) -> Result<()> {
+        core::remove_live_activity(self, payload)
     }
 }

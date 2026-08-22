@@ -1,6 +1,7 @@
 pub mod core {
     use crate::models::*;
     use anyhow::{Context, Result};
+    use std::collections::HashMap;
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use std::path::PathBuf;
@@ -38,15 +39,20 @@ pub mod core {
         },
     };
 
-    static CURRENT_TAG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    static CURRENT_META: OnceLock<Mutex<Option<Meta>>> = OnceLock::new();
+    /// Registry of all live activities, keyed by activity id.
+    /// Each entry keeps the toast tag (used to address the right toast via
+    /// ToastNotificationManager history / UpdateWithTag) plus its metadata.
+    static ACTIVE_ACTIVITIES: OnceLock<Mutex<HashMap<String, ActivityEntry>>> = OnceLock::new();
     static WINRT_INIT: OnceLock<()> = OnceLock::new();
     const FIXED_AUMID: &str = "moe.astralsight.astrobox";
-    fn current_tag() -> &'static Mutex<Option<String>> {
-        CURRENT_TAG.get_or_init(|| Mutex::new(None))
+    fn active_activities() -> &'static Mutex<HashMap<String, ActivityEntry>> {
+        ACTIVE_ACTIVITIES.get_or_init(|| Mutex::new(HashMap::new()))
     }
-    fn current_meta() -> &'static Mutex<Option<Meta>> {
-        CURRENT_META.get_or_init(|| Mutex::new(None))
+
+    #[derive(Clone)]
+    struct ActivityEntry {
+        tag: String,
+        meta: Meta,
     }
 
     #[derive(Clone)]
@@ -465,17 +471,18 @@ pub mod core {
             format!("{:x}", hasher.finish())
         };
         {
-            let mut g = current_tag().lock().unwrap();
-            *g = Some(unique_tag.clone());
-        }
-        {
-            let mut m = current_meta().lock().unwrap();
-            *m = Some(Meta {
-                title: title.clone(),
-                text: text.clone(),
-                task_name: task_name.clone(),
-                task_type: task_type.clone(),
-            });
+            active_activities().lock().unwrap().insert(
+                id.clone(),
+                ActivityEntry {
+                    tag: unique_tag.clone(),
+                    meta: Meta {
+                        title: title.clone(),
+                        text: text.clone(),
+                        task_name: task_name.clone(),
+                        task_type: task_type.clone(),
+                    },
+                },
+            );
         }
         let progress_value = state
             .remove("progress")
@@ -538,9 +545,7 @@ pub mod core {
         notifier.Show(&toast).context("Show toast failed")?;
         if (progress_value - 1.0).abs() < f32::EPSILON {
             schedule_remove_history(unique_tag.clone());
-            let mut g = current_tag().lock().unwrap();
-            *g = None;
-            *current_meta().lock().unwrap() = None;
+            active_activities().lock().unwrap().remove(&id);
         }
 
         Ok(())
@@ -550,12 +555,20 @@ pub mod core {
         _self: &impl Sized,
         payload: UpdateLiveActivityRequest,
     ) -> Result<()> {
-        let tag = {
-            let g = current_tag().lock().unwrap();
-            g.as_ref()
-                .cloned()
-                .context("No active live activity to update")?
+        let entry = {
+            let map = active_activities().lock().unwrap();
+            match map.get(&payload.activity_id) {
+                Some(e) => e.clone(),
+                None => {
+                    eprintln!(
+                        "[live-activity] update ignored: unknown activity id '{}'",
+                        payload.activity_id
+                    );
+                    return Ok(());
+                }
+            }
         };
+        let tag = entry.tag;
 
         let mut p = payload
             .state
@@ -572,10 +585,7 @@ pub mod core {
         p = p.clamp(0.0, 1.0);
 
         if (p - 1.0).abs() < f32::EPSILON {
-            let meta = {
-                let m = current_meta().lock().unwrap();
-                m.clone().context("No meta to update")?
-            };
+            let meta = entry.meta;
             let progress_text = "100%".to_string();
             let image_xml = String::new();
             let xml = format!(
@@ -621,9 +631,10 @@ pub mod core {
             let notifier = create_notifier()?;
             notifier.Show(&toast).context("Show toast failed")?;
             schedule_remove_history(tag.clone());
-            let mut g = current_tag().lock().unwrap();
-            *g = None;
-            *current_meta().lock().unwrap() = None;
+            active_activities()
+                .lock()
+                .unwrap()
+                .remove(&payload.activity_id);
         } else {
             let pct_text = if let Some(s) = payload.state.get("percent") {
                 format!("{}%", s)
@@ -647,8 +658,24 @@ pub mod core {
         Ok(())
     }
 
-    pub fn remove_live_activity(_self: &impl Sized) -> Result<()> {
-        if let Some(tag) = { current_tag().lock().unwrap().clone() } {
+    pub fn remove_live_activity(
+        _self: &impl Sized,
+        payload: RemoveLiveActivityRequest,
+    ) -> Result<()> {
+        let tag = {
+            let mut map = active_activities().lock().unwrap();
+            match map.remove(&payload.activity_id) {
+                Some(entry) => entry.tag,
+                None => {
+                    eprintln!(
+                        "[live-activity] remove ignored: unknown activity id '{}'",
+                        payload.activity_id
+                    );
+                    return Ok(());
+                }
+            }
+        };
+        {
             let notifier = create_notifier()?;
             let data = NotificationData::new()?;
             let values = data.Values()?;
@@ -663,7 +690,6 @@ pub mod core {
             let group_h = HSTRING::from("");
             let _ = notifier.UpdateWithTagAndGroup(&data, &tag_h, &group_h);
             schedule_remove_history(tag);
-            *current_tag().lock().unwrap() = None;
         }
         Ok(())
     }
