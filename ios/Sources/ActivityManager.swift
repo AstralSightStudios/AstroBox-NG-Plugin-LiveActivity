@@ -28,7 +28,7 @@ public final class ActivityManager {
     /// 根据一个结构化的请求对象创建并启动一个新的实时活动。
     ///
     /// - Parameter request: 包含所有活动所需数据的 `CreateLiveActivityRequest` 对象。
-    public func createActivity(with request: CreateLiveActivityRequest) {
+    public func createActivity(with request: CreateLiveActivityRequest) async {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             webviewLog("Tip: The user has disabled live activity in the system.")
             return
@@ -59,12 +59,9 @@ public final class ActivityManager {
                 if let oldActivity = self.activitiesById[taskQueueData.id] {
                     webviewLog("Duplicate live activity ID \(taskQueueData.id), ending the previous one first.")
                     self.endingActivityIds.insert(taskQueueData.id)
-                    // Inherit @MainActor so capturing the non-Sendable Activity stays race-free.
-                    Task { [weak self] in
-                        await oldActivity.end(nil, dismissalPolicy: .immediate)
-                        self?.endingActivityIds.remove(taskQueueData.id)
-                    }
                     self.activitiesById[taskQueueData.id] = nil
+                    await oldActivity.end(nil, dismissalPolicy: .immediate)
+                    self.endingActivityIds.remove(taskQueueData.id)
                 }
 
                 let activity = try Activity.request(
@@ -87,7 +84,7 @@ public final class ActivityManager {
     ///
     /// 由于被杀的 App 不会再执行任何代码（不会回调 willTerminate），唯一能可靠清理这种
     /// 残留灵动岛/锁屏活动的时机就是下一次冷启动。这里把它们全部立刻结束。
-    public func endOrphanedActivities() {
+    public func endOrphanedActivities() async {
         let activities = Activity<LiveActivityAttributes>.activities
 
         // 先就地清空本地记录，让随后的新建请求不被旧状态影响。
@@ -100,13 +97,10 @@ public final class ActivityManager {
 
         webviewLog("Cold launch: ending \(activities.count) orphaned live activity(ies).")
 
-        // Inherit @MainActor so capturing activities stays race-free.
-        Task {
-            for activity in activities {
-                await activity.end(nil, dismissalPolicy: .immediate)
-            }
-            webviewLog("Cold launch: orphaned live activities ended.")
+        for activity in activities {
+            await activity.end(nil, dismissalPolicy: .immediate)
         }
+        webviewLog("Cold launch: orphaned live activities ended.")
     }
 
     // MARK: - Update
@@ -115,7 +109,7 @@ public final class ActivityManager {
     /// - Parameters:
     ///   - activityId: 目标活动的业务 id（attributes.id）。
     ///   - newState: 新的动态内容状态字典。
-    public func updateActivity(activityId: String, newState: [String: String]) {
+    public func updateActivity(activityId: String, newState: [String: String]) async {
         guard !endingActivityIds.contains(activityId) else {
             webviewLog("Skip update: activity \(activityId) is ending.")
             return
@@ -136,17 +130,12 @@ public final class ActivityManager {
             return
         }
 
-        let state = newState
+        let updatedContentState = LiveActivityAttributes.ContentState(stateItems: newState)
+        let content = ActivityContent(state: updatedContentState, staleDate: nil)
 
-        // Inherit @MainActor so capturing the non-Sendable Activity stays race-free.
-        Task {
-            let updatedContentState = LiveActivityAttributes.ContentState(stateItems: state)
-            let content = ActivityContent(state: updatedContentState, staleDate: nil)
+        await activity.update(content)
 
-            await activity.update(content)
-
-            webviewLog("Live activity \(activityId) updated successfully.")
-        }
+        webviewLog("Live activity \(activityId) updated successfully.")
     }
 
     // MARK: - End
@@ -161,7 +150,7 @@ public final class ActivityManager {
         activityId: String,
         finalState: [String: String]? = nil,
         dismissalPolicy: ActivityUIDismissalPolicy = .immediate
-    ) {
+    ) async {
         if activitiesById[activityId] == nil {
             // 本地记录缺失时以 ActivityKit 为准做一次恢复。
             if let recovered = Activity<LiveActivityAttributes>.activities.first(where: { $0.attributes.id == activityId }) {
@@ -172,9 +161,6 @@ public final class ActivityManager {
 
         endingActivityIds.insert(activityId)
 
-        let state = finalState
-        let policy = dismissalPolicy
-
         // End the exact stored instance (never a re-queried duplicate).
         guard let activity = activitiesById[activityId] else {
             endingActivityIds.remove(activityId)
@@ -182,31 +168,28 @@ public final class ActivityManager {
             return
         }
 
-        // Inherit @MainActor so capturing the non-Sendable Activity stays race-free.
-        Task {
-            let finalContent: ActivityContent<LiveActivityAttributes.ContentState>?
+        let finalContent: ActivityContent<LiveActivityAttributes.ContentState>?
 
-            if let state {
-                let finalContentState = LiveActivityAttributes.ContentState(stateItems: state)
-                finalContent = ActivityContent(state: finalContentState, staleDate: nil)
-            } else {
-                finalContent = nil
-            }
+        if let finalState {
+            let finalContentState = LiveActivityAttributes.ContentState(stateItems: finalState)
+            finalContent = ActivityContent(state: finalContentState, staleDate: nil)
+        } else {
+            finalContent = nil
+        }
 
-            await activity.end(finalContent, dismissalPolicy: policy)
+        await activity.end(finalContent, dismissalPolicy: dismissalPolicy)
 
-            // Only clear the mapping if it still points at the instance
-            // we just ended; a newer instance may have taken over this id.
-            if self.activitiesById[activityId] === activity {
-                self.activitiesById[activityId] = nil
-            }
-            self.endingActivityIds.remove(activityId)
+        // Only clear the mapping if it still points at the instance
+        // we just ended; a newer instance may have taken over this id.
+        if self.activitiesById[activityId] === activity {
+            self.activitiesById[activityId] = nil
+        }
+        self.endingActivityIds.remove(activityId)
 
-            if Activity<LiveActivityAttributes>.activities.isEmpty {
-                webviewLog("The live activity \(activityId) has ended (immediate).")
-            } else {
-                webviewLog("The live activity \(activityId) requested to end; system may finalize shortly.")
-            }
+        if Activity<LiveActivityAttributes>.activities.isEmpty {
+            webviewLog("The live activity \(activityId) has ended (immediate).")
+        } else {
+            webviewLog("The live activity \(activityId) requested to end; system may finalize shortly.")
         }
     }
 }

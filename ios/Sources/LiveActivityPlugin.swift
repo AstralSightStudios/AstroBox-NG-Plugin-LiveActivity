@@ -2,49 +2,81 @@ import SwiftRs
 import Tauri
 import WebKit
 
+private enum LiveActivityCommand: Sendable {
+    case cleanupOrphans
+    case create(CreateLiveActivityRequest)
+    case update(UpdateLiveActivityRequest)
+    case remove(RemoveLiveActivityRequest)
+}
+
 class LiveActivityPlugin: Plugin {
+    private let commandContinuation: AsyncStream<LiveActivityCommand>.Continuation
+    private var commandProcessor: Task<Void, Never>?
+
+    override init() {
+        let (stream, continuation) = AsyncStream.makeStream(of: LiveActivityCommand.self)
+        self.commandContinuation = continuation
+        super.init()
+
+        // Tauri invokes native commands on its own serial queue, while
+        // ActivityKit must be coordinated on the main actor. A single stream
+        // consumer preserves create -> update -> remove ordering without
+        // blocking the caller until a MainActor task completes.
+        self.commandProcessor = Task { @MainActor in
+            for await command in stream {
+                guard !Task.isCancelled else { break }
+
+                guard #available(iOS 16.2, *) else {
+                    webviewLog("Live Activity is not supported on this system.")
+                    continue
+                }
+
+                switch command {
+                case .cleanupOrphans:
+                    await ActivityManager.shared.endOrphanedActivities()
+                case .create(let request):
+                    await ActivityManager.shared.createActivity(with: request)
+                case .update(let request):
+                    await ActivityManager.shared.updateActivity(
+                        activityId: request.activityId,
+                        newState: request.state
+                    )
+                case .remove(let request):
+                    await ActivityManager.shared.endActivity(activityId: request.activityId)
+                }
+            }
+        }
+    }
+
+    deinit {
+        commandContinuation.finish()
+        commandProcessor?.cancel()
+    }
+
     override func load(webview: WKWebView) {
         Task { @MainActor in
             WebViewLogger.shared.set(webview: webview)
-            // 冷启动清理：上次进程若被杀，残留的实时活动是孤儿，直接清掉。
-            if #available(iOS 16.2, *) {
-                ActivityManager.shared.endOrphanedActivities()
-            }
         }
+        // Cleanup is part of the same ordered command stream, so a new
+        // activity cannot race an unfinished cold-launch cleanup.
+        commandContinuation.yield(.cleanupOrphans)
     }
-    
+
     @objc public func createLiveActivity(_ invoke: Invoke) throws {
         let args = try invoke.parseArgs(CreateLiveActivityRequest.self)
-        if #available(iOS 16.2, *) {
-          webviewLog("Joining main thread...")
-          Task { @MainActor in
-              webviewLog("Creating activity...")
-              ActivityManager.shared.createActivity(with: args)
-          }
-        } else {
-          webviewLog("Live Activity Unsupport this system.")
-          // 不支持的系统什么都不做
-        }
+        commandContinuation.yield(.create(args))
         invoke.resolve()
     }
-    
+
     @objc public func updateLiveActivity(_ invoke: Invoke) throws {
         let args = try invoke.parseArgs(UpdateLiveActivityRequest.self)
-        if #available(iOS 16.2, *) {
-            Task { @MainActor in
-                ActivityManager.shared.updateActivity(activityId: args.activityId, newState: args.state)
-            }
-        }
+        commandContinuation.yield(.update(args))
         invoke.resolve()
     }
-    
+
     @objc public func removeLiveActivity(_ invoke: Invoke) throws {
         let args = try invoke.parseArgs(RemoveLiveActivityRequest.self)
-        if #available(iOS 16.2, *) {
-            Task { @MainActor in
-                ActivityManager.shared.endActivity(activityId: args.activityId)
-            }
-        }
+        commandContinuation.yield(.remove(args))
         invoke.resolve()
     }
 }
