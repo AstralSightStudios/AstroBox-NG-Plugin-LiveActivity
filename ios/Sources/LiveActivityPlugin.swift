@@ -82,6 +82,6 @@ class LiveActivityPlugin: Plugin {
 }
 
 @_cdecl("init_plugin_live_activity")
-func initPlugin() -> Plugin {
+public func initPlugin() -> Plugin {
     return LiveActivityPlugin()
 }
